@@ -11,37 +11,42 @@
  * =========================================================================
  */
 
-// Список официальных RSS-лент Microsoft и ведущих профильных изданий с ежедневными обновлениями
+// Список официальных RSS-лент Microsoft и проверенных изданий
 const RSS_FEEDS = [
   {
-    name: 'Windows Latest (Самые оперативные новости обновлений Windows 11, багов и KB)',
-    source: 'windows_latest',
-    url: 'https://www.windowslatest.com/feed/',
-    category: 'Known Issue / Bug'
+    "name": "Windows Insider Blog (Официальный блог Microsoft)",
+    "url": "https://blogs.windows.com/windows-insider/feed/",
+    "category": "Insider Build"
   },
   {
-    name: 'Neowin Windows 11 (Ежедневные инсайдерские сборки и накопительные апдейты)',
-    source: 'neowin',
-    url: 'https://www.neowin.net/tags/windows-11/rss.xml',
-    category: 'Cumulative Update'
+    "name": "Windows Experience Blog (Официальные релизы Windows 11)",
+    "url": "https://blogs.windows.com/windowsexperience/feed/",
+    "category": "Windows Release"
   },
   {
-    name: 'Windows Insider Blog (Официальный блог команды Microsoft Insider)',
-    source: 'windows_insider',
-    url: 'https://blogs.windows.com/windows-insider/feed/',
-    category: 'Insider Build'
+    "name": "Microsoft Security Blog (MSRC & Zero-Day)",
+    "url": "https://www.microsoft.com/en-us/security/blog/feed/",
+    "category": "Security / Zero-Day"
   },
   {
-    name: 'Pureinfotech (Подробные лог-файлы патчей KB и прямые ссылки на MSU)',
-    source: 'pureinfotech',
-    url: 'https://pureinfotech.com/feed/',
-    category: 'Cumulative Update'
+    "name": "Microsoft Azure Updates (Инфраструктура и облако)",
+    "url": "https://azure.microsoft.com/en-us/updates/feed/",
+    "category": "Cloud & Enterprise"
   },
   {
-    name: 'BleepingComputer Windows (Экстренные баги, сбои BSOD и проблемы безопасности)',
-    source: 'bleeping_computer',
-    url: 'https://www.bleepingcomputer.com/feed/',
-    category: 'Known Issue / Bug'
+    "name": "Pureinfotech (Каталог KB и логи патчей)",
+    "url": "https://pureinfotech.com/feed/",
+    "category": "Cumulative Update"
+  },
+  {
+    "name": "COMSS",
+    "url": "https://www.comss.ru/rss.php",
+    "category": "Custom Feed"
+  },
+  {
+    "name": "thecommunity",
+    "url": "https://thecommunity.ru/rss.xml",
+    "category": "Custom Feed"
   }
 ];
 
@@ -235,10 +240,10 @@ async function generateAIPost(ai, item, db = null) {
   }
 
   const models = [
-    '@cf/meta/llama-3.1-8b-instruct',
-    '@cf/meta/llama-3-8b-instruct',
+    '@cf/meta/llama-3.3-70b-instruct',
     '@cf/meta/llama-3.2-3b-instruct',
-    '@cf/mistral/mistral-7b-instruct-v0.1'
+    '@cf/qwen/qwen2.5-7b-instruct',
+    '@cf/meta/llama-3.1-70b-instruct'
   ];
 
   const systemPrompt = `Ты — профессиональный IT-журналист, редактор и автор русскоязычного Telegram-канала о Windows Update и Windows Insider.
@@ -410,20 +415,29 @@ async function handleTelegramUpdate(update, env) {
 
     let aiStatus = '❌ Не привязана в Cloudflare';
     let aiTestResult = '';
+    let usedModel = '';
     if (env.AI && typeof env.AI.run === 'function') {
-      try {
-        const testRes = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-          messages: [{ role: 'user', content: 'Ответь одним словом "Работает" на русском' }],
-          max_tokens: 20
-        });
-        if (testRes && testRes.response) {
-          aiStatus = '✅ Работает идеально (Llama 3.1 8B)';
-          aiTestResult = testRes.response.trim();
-        } else {
-          aiStatus = '⚠️ Ответ пустой';
+      const diagModels = [
+        '@cf/meta/llama-3.3-70b-instruct',
+        '@cf/meta/llama-3.2-3b-instruct',
+        '@cf/qwen/qwen2.5-7b-instruct'
+      ];
+
+      for (const m of diagModels) {
+        try {
+          const testRes = await env.AI.run(m, {
+            messages: [{ role: 'user', content: 'Ответь одним словом "Работает" на русском' }],
+            max_tokens: 20
+          });
+          if (testRes && testRes.response) {
+            aiStatus = `✅ Подключена и работает (${m})`;
+            aiTestResult = testRes.response.trim();
+            usedModel = m;
+            break;
+          }
+        } catch (aiErr) {
+          aiStatus = `⚠️ Ошибка: ${aiErr.message}`;
         }
-      } catch (aiErr) {
-        aiStatus = `⚠️ Ошибка выполнения AI: ${aiErr.message}`;
       }
     } else {
       aiStatus = '❌ <b>Binding AI отсутствует!</b>\n<i>Как исправить:</i> В Cloudflare Dashboard перейдите в Workers -> win-update-bot -> <b>Settings</b> -> <b>Bindings</b> -> нажмите <b>Add</b> -> выберите <b>Workers AI</b> -> задайте имя переменной <code>AI</code> и сохраните.';
@@ -450,18 +464,18 @@ async function handleTelegramUpdate(update, env) {
     return;
   }
 
-  // 4. Команда /stats
-  if (text.startsWith('/stats')) {
+  // 6. Команда /stats или /cron
+  if (text.startsWith('/stats') || text.startsWith('/cron')) {
     const countUpdates = await env.DB.prepare('SELECT COUNT(*) as count FROM updates').first();
     const countSubs = await env.DB.prepare('SELECT COUNT(*) as count FROM subscribers WHERE is_active = 1').first();
     const lastRun = await getSetting(env.DB, 'last_cron_run');
 
-    const statsMsg = `📊 <b>Статистика Windows Update AI Bot:</b>\n\n` +
-      `• Обработано обновлений в D1: <b>${countUpdates?.count || 0}</b>\n` +
-      `• Активных получателей: <b>${countSubs?.count || 0}</b>\n` +
-      `• Последняя проверка лент: <code>${lastRun || 'Нет данных'}</code>\n` +
-      `• ИИ Модель: <code>@cf/meta/llama-3.1-8b-instruct</code>\n` +
-      `• Платформа: Cloudflare Workers + D1 Database`;
+    const statsMsg = `📊 <b>Статус автомониторинга Windows Update:</b>\n\n` +
+      `• Сохранено обновлений в D1: <b>${countUpdates?.count || 0}</b>\n` +
+      `• Активных получателей/каналов: <b>${countSubs?.count || 0}</b>\n` +
+      `• Последняя проверка лент: <code>${lastRun || 'еще не запускалась'}</code>\n` +
+      `• ИИ Модель: <code>Llama 3.3 70B / Fast (Workers AI)</code>\n\n` +
+      `💡 <i>Примечание: Бот автоматически публикует посты ТОЛЬКО при выходе НОВОГО патча от Microsoft. Если новых статей с момента прошлой проверки не появилось, бот не спамит повторными постами.</i>`;
 
     await sendTelegramMessage(token, chatId, statsMsg);
     return;
@@ -485,8 +499,7 @@ async function handleTelegramUpdate(update, env) {
     const helpMsg = `ℹ️ <b>Справка по боту Windows Update AI:</b>\n\n` +
       `1. Добавьте бота в ваш Telegram-канал как Администратора (с правом отправки сообщений).\n` +
       `2. Отправьте боту команду <code>/setchannel @ваш_канал</code>\n` +
-      `3. Бот каждые 30-60 минут сканирует ленты Microsoft и публикует новые статьи с разбором ошибок и исправлений.\n\n` +
-      `Команды: /check, /latest, /stats, /setchannel`;
+      `3. Бот каждые 30-60 минут сканирует ленты Microsoft и публикует новые статьи с разбором ошибок и исправлений.`;
     await sendTelegramMessage(token, chatId, helpMsg);
   }
 }
