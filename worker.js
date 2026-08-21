@@ -14,39 +14,34 @@
 // Список официальных RSS-лент Microsoft и проверенных изданий
 const RSS_FEEDS = [
   {
-    "name": "Windows Insider Blog (Официальный блог Microsoft)",
-    "url": "https://blogs.windows.com/windows-insider/feed/",
-    "category": "Insider Build"
+    name: 'Windows Insider Blog (Официальный блог Microsoft)',
+    source: 'windows_insider',
+    url: 'https://blogs.windows.com/windows-insider/feed/',
+    category: 'Insider Build'
   },
   {
-    "name": "Windows Experience Blog (Официальные релизы Windows 11)",
-    "url": "https://blogs.windows.com/windowsexperience/feed/",
-    "category": "Windows Release"
+    name: 'Windows Experience Blog (Официальные релизы Windows 11)',
+    source: 'windows_experience',
+    url: 'https://blogs.windows.com/windowsexperience/feed/',
+    category: 'Windows Release'
   },
   {
-    "name": "Microsoft Security Blog (MSRC & Zero-Day)",
-    "url": "https://www.microsoft.com/en-us/security/blog/feed/",
-    "category": "Security / Zero-Day"
+    name: 'Microsoft Security Blog (MSRC & Zero-Day)',
+    source: 'ms_security',
+    url: 'https://www.microsoft.com/en-us/security/blog/feed/',
+    category: 'Security / Zero-Day'
   },
   {
-    "name": "Microsoft Azure Updates (Инфраструктура и облако)",
-    "url": "https://azure.microsoft.com/en-us/updates/feed/",
-    "category": "Cloud & Enterprise"
+    name: 'Microsoft Azure Updates (Инфраструктура и облако)',
+    source: 'azure_updates',
+    url: 'https://azure.microsoft.com/en-us/updates/feed/',
+    category: 'Cloud & Enterprise'
   },
   {
-    "name": "Pureinfotech (Каталог KB и логи патчей)",
-    "url": "https://pureinfotech.com/feed/",
-    "category": "Cumulative Update"
-  },
-  {
-    "name": "COMSS",
-    "url": "https://www.comss.ru/rss.php",
-    "category": "Custom Feed"
-  },
-  {
-    "name": "thecommunity",
-    "url": "https://thecommunity.ru/rss.xml",
-    "category": "Custom Feed"
+    name: 'Pureinfotech (Подробные лог-файлы патчей KB и прямые ссылки на MSU)',
+    source: 'pureinfotech',
+    url: 'https://pureinfotech.com/feed/',
+    category: 'Cumulative Update'
   }
 ];
 
@@ -173,23 +168,30 @@ async function processAllFeeds(env) {
           }
         }
 
-        // 4. Сохраняем запись в D1
-        await env.DB.prepare(`
-          INSERT INTO updates (guid, title, link, pub_date, source, category, kb_number, raw_content, ai_summary, telegram_message_id, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          item.guid,
-          item.title,
-          item.link,
-          item.pubDate || new Date().toISOString(),
-          item.source,
-          item.category,
-          kbNumber,
-          item.rawContent.slice(0, 3000),
-          aiPost,
-          sentMessageId,
-          'published'
-        ).run();
+        // 4. Сохраняем запись в D1 (с защитой от сбоев)
+        if (env.DB) {
+          try {
+            await env.DB.prepare(`
+              INSERT INTO updates (guid, title, link, pub_date, source, category, kb_number, raw_content, ai_summary, telegram_message_id, status)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(guid) DO UPDATE SET created_at = CURRENT_TIMESTAMP
+            `).bind(
+              item.guid,
+              item.title,
+              item.link,
+              item.pubDate || new Date().toISOString(),
+              item.source,
+              item.category,
+              kbNumber,
+              item.rawContent.slice(0, 3000),
+              aiPost,
+              sentMessageId,
+              'published'
+            ).run();
+          } catch (dbSaveErr) {
+            console.error('Failed to save update record:', dbSaveErr);
+          }
+        }
 
         processedItems.push({
           title: item.title,
@@ -328,12 +330,18 @@ async function handleTelegramUpdate(update, env) {
 
   // 1. Команда /start
   if (text.startsWith('/start')) {
-    // Регистрируем подписчика в D1
-    await env.DB.prepare(`
-      INSERT INTO subscribers (chat_id, type, username, title, is_active)
-      VALUES (?, ?, ?, ?, 1)
-      ON CONFLICT(chat_id) DO UPDATE SET is_active = 1, username = ?
-    `).bind(chatId, msg.chat.type, username, msg.chat.title || username, username).run();
+    // Регистрируем подписчика в D1 (с защитой от ошибок)
+    if (env.DB) {
+      try {
+        await env.DB.prepare(`
+          INSERT INTO subscribers (chat_id, type, username, title, is_active)
+          VALUES (?, ?, ?, ?, 1)
+          ON CONFLICT(chat_id) DO UPDATE SET is_active = 1, username = ?
+        `).bind(chatId, msg.chat.type, username, msg.chat.title || username, username).run();
+      } catch (dbErr) {
+        console.warn('Subscribers table note:', dbErr.message);
+      }
+    }
 
     const welcome = `👋 <b>Добро пожаловать в Windows Update & Insider AI Monitor!</b>\n\n` +
       `Я автоматически отслеживаю:\n` +
