@@ -1,0 +1,6 @@
+{
+  "name": "Windows Update AI Telegram Bot",
+  "description": "Cloudflare Worker & D1 Database Generator and Simulator for Windows Update & Insider AI Telegram Bot",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
